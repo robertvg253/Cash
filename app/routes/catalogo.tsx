@@ -1,10 +1,11 @@
 import { LoaderFunctionArgs, ActionFunctionArgs, json, unstable_createMemoryUploadHandler, unstable_parseMultipartFormData, redirect } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
-import { useState } from "react";
+import { useLoaderData, useFetcher, useNavigate } from "@remix-run/react";
+import { useState, useEffect, useCallback } from "react";
 import { requireUser } from "../utils/session.server";
 import { supabase } from "../supabase.server";
 import ImageEditModal from "../components/ImageEditModal";
 import React from "react";
+import { getColorHex } from "../utils/colorUtils";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUser(request);
@@ -76,12 +77,58 @@ export async function action({ request }: ActionFunctionArgs) {
   return redirect("/catalogo");
 }
 
+// Debounce para los filtros (igual que en Inventario)
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+  return debouncedValue;
+}
+
 export default function Catalogo() {
   const { products, error } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
+  // Barra de búsqueda y filtro de color (igual que Inventario)
+  const [searchValue, setSearchValue] = useState("");
+  const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined);
+  const [searchParams, setSearchParams] = useState(new URLSearchParams());
+  // Debounce para los filtros
+  const debouncedSearch = useDebounce(searchValue, 300);
+  const debouncedColor = useDebounce(selectedColor, 300);
+  // Efecto para actualizar la URL cuando cambien los filtros debounced
+  useEffect(() => {
+    const newSearchParams = new URLSearchParams(searchParams);
+    if (debouncedSearch) {
+      newSearchParams.set('search', debouncedSearch);
+    } else {
+      newSearchParams.delete('search');
+    }
+    if (debouncedColor) {
+      newSearchParams.set('color', debouncedColor);
+    } else {
+      newSearchParams.delete('color');
+    }
+    const currentSearch = searchParams.get('search') || '';
+    const currentColor = searchParams.get('color') || '';
+    if (debouncedSearch !== currentSearch || debouncedColor !== currentColor) {
+      navigate(`?${newSearchParams.toString()}`, { replace: true });
+    }
+  }, [debouncedSearch, debouncedColor, searchParams, navigate]);
+  const handleClearFilters = useCallback(() => {
+    setSearchValue('');
+    setSelectedColor(undefined);
+    navigate('/catalogo', { replace: true });
+  }, [navigate]);
 
   const handleOpenModal = (product: any) => {
     setSelectedProduct(product);
@@ -116,30 +163,76 @@ export default function Catalogo() {
   }, [deleting, fetcher.state]);
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50 px-2 pt-4 pb-4 sm:p-6 w-full pt-16 sm:pt-4">
+      <div className="w-full sm:max-w-7xl sm:mx-auto">
         <h1 className="text-2xl font-semibold text-gray-900 mb-6">Catálogo</h1>
         {error && <div className="text-red-500 mb-4">{error}</div>}
-        {/* Responsive: Cards en mobile, tabla en desktop */}
+        {/* Barra de búsqueda y filtrado arriba, igual que Inventario */}
+        <div className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-gray-200 mb-4 sm:mb-6 w-full">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:gap-4 w-full">
+            {/* Búsqueda General */}
+            <div className="flex-1">
+              <input
+                type="text"
+                value={searchValue}
+                onChange={(e) => setSearchValue(e.target.value)}
+                placeholder="Buscar Producto (Ej: downline 1039)"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 h-10"
+              />
+            </div>
+            {/* Filtro Color */}
+            <div className="flex items-center gap-2 mt-2 sm:mt-0">
+              <select
+                value={selectedColor || ''}
+                onChange={e => setSelectedColor(e.target.value || undefined)}
+                className="px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 h-10"
+                style={{ minWidth: 180 }}
+              >
+                <option value="">Todos los colores</option>
+                {[...new Set(products.map((p: any) => p.color).filter(Boolean))].map((color: string) => (
+                  <option key={color} value={color}>{color}</option>
+                ))}
+              </select>
+              <span className="inline-block w-8 h-8 rounded border border-gray-300 transition-colors duration-200 align-middle" style={{ backgroundColor: selectedColor ? getColorHex(selectedColor) : 'transparent' }} />
+            </div>
+            {/* Botón Limpiar */}
+            <div className="flex items-center mt-2 sm:mt-0">
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                className="px-4 h-10 bg-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-300 transition"
+              >
+                Limpiar Filtros
+              </button>
+            </div>
+          </div>
+        </div>
+        {/* Lista de productos en mobile (cards apiladas) */}
         <div className="block sm:hidden">
           <div className="space-y-4">
-            {products.map((product: any) => (
-              <div key={product.id} className="flex w-full max-w-full items-stretch bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            {products.filter((p: any) => (!selectedColor || p.color === selectedColor) && (!searchValue || p.title?.toLowerCase().includes(searchValue.toLowerCase()))).map((product: any) => (
+              <div key={product.id} className="flex w-full items-stretch bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                 {/* Columna izquierda: nombre y color (75%) */}
-                <div className="flex-[3] min-w-0 flex flex-col justify-center p-3">
+                <div className="flex-[3] flex flex-col justify-center p-3 min-w-0">
                   <div className="font-medium text-gray-900 text-sm mb-1 break-words whitespace-normal">{product.title || 'Sin título'}</div>
                   <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: product.color?.startsWith('#') ? product.color : '#CCCCCC', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)' }} />
+                    <div
+                      className="w-4 h-4 rounded border border-gray-300"
+                      style={{
+                        backgroundColor: getColorHex(product.color),
+                        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)'
+                      }}
+                    />
                     <span
                       className="text-xs font-medium break-words whitespace-normal"
-                      style={{ color: product.color?.startsWith('#') ? product.color : undefined }}
+                      style={{ color: product.color || undefined }}
                     >
                       {product.color || 'Sin color'}
                     </span>
                   </div>
                 </div>
                 {/* Miniatura con overlay de lápiz (25%) */}
-                <div className="relative flex-[1] min-w-0 w-20 h-20 flex-shrink-0 flex items-center justify-center cursor-pointer group" onClick={() => handleOpenModal(product)}>
+                <div className="relative flex-[1] w-20 h-20 flex-shrink-0 flex items-center justify-center cursor-pointer group" onClick={() => handleOpenModal(product)}>
                   <div className="absolute inset-0 bg-black bg-opacity-30 group-hover:bg-opacity-50 transition rounded flex items-center justify-center z-10" />
                   {product.image_url ? (
                     <img src={product.image_url} alt={product.title} className="object-contain w-full h-full z-0" />
@@ -170,7 +263,7 @@ export default function Catalogo() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {products.map((product: any) => (
+                {products.filter((p: any) => (!selectedColor || p.color === selectedColor) && (!searchValue || p.title?.toLowerCase().includes(searchValue.toLowerCase()))).map((product: any) => (
                   <tr key={product.id} className="hover:bg-gray-50">
                     {/* Miniatura */}
                     <td className="px-3 sm:px-6 py-3">
@@ -189,10 +282,10 @@ export default function Catalogo() {
                     {/* Color */}
                     <td className="px-3 sm:px-6 py-3 text-sm text-gray-900">
                       <div className="flex items-center space-x-2">
-                        <div className="w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: product.color?.startsWith('#') ? product.color : '#CCCCCC', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)' }} />
+                        <div className="w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: getColorHex(product.color), boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)' }} />
                         <span
                           className="max-w-[80px] sm:max-w-none truncate font-medium"
-                          style={{ color: product.color?.startsWith('#') ? product.color : undefined }}
+                          style={{ color: product.color || undefined }}
                         >
                           {product.color || 'Sin color'}
                         </span>

@@ -29,6 +29,9 @@ export default function ImageEditModal({
       setSelectedFile(null);
       setPreviewUrl(null);
       setError(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   }, [isOpen]);
 

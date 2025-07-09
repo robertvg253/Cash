@@ -3,6 +3,7 @@ import { useLoaderData, useSearchParams, useNavigate } from "@remix-run/react";
 import { useState, useEffect, useCallback } from "react";
 import { requireUser } from "../utils/session.server";
 import { supabase } from "../supabase.server";
+import { getColorHex } from "../utils/colorUtils";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUser(request);
@@ -111,8 +112,11 @@ export default function Productos() {
     navigate('/productos', { replace: true });
   }, [navigate]);
 
+  // Agregar filtro visual de color arriba de la tabla:
+  const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined);
+
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 pt-16 sm:pt-4">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 space-y-2 sm:space-y-0">
@@ -124,7 +128,7 @@ export default function Productos() {
         
         {/* Filtros */}
         <div className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-gray-200 mb-4 sm:mb-6">
-          <div className="space-y-4 sm:space-y-0 sm:grid sm:grid-cols-1 md:grid-cols-3 sm:gap-4">
+          <div className="space-y-4 sm:space-y-0 sm:grid sm:grid-cols-1 md:grid-cols-4 sm:gap-4">
             {/* Búsqueda */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1 bg-white">Buscar Producto</label>
@@ -150,6 +154,26 @@ export default function Productos() {
                   <option key={category} value={category}>{category}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Filtro Color */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1 bg-white">Color</label>
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedColor || ''}
+                  onChange={e => setSelectedColor(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900"
+                >
+                  <option value="">Todos los colores</option>
+                  {[...new Set(products.map((p: any) => p.color).filter(Boolean))].map((color: string) => (
+                    <option key={color} value={color}>{color}</option>
+                  ))}
+                </select>
+                {selectedColor && (
+                  <span className="inline-block w-5 h-5 rounded border border-gray-300" style={{ backgroundColor: getColorHex(selectedColor) }} />
+                )}
+              </div>
             </div>
 
             {/* Botón Limpiar */}
@@ -189,7 +213,7 @@ export default function Productos() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {products.map((product: any) => (
+                {products.filter((p: any) => !selectedColor || p.color === selectedColor).map((product: any) => (
                   <tr key={product.id} className="hover:bg-gray-50">
                     <td className="px-3 sm:px-6 py-4 text-sm text-gray-900">
                       <div className="max-w-[200px] sm:max-w-none truncate">

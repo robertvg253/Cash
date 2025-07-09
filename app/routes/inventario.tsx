@@ -1,8 +1,9 @@
 import { LoaderFunctionArgs, ActionFunctionArgs, json } from "@remix-run/node";
 import { useLoaderData, useFetcher, useRevalidator, useSearchParams, useNavigate } from "@remix-run/react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { requireUser } from "../utils/session.server";
 import { supabase } from "../supabase.server";
+import { getColorHex } from "../utils/colorUtils";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUser(request);
@@ -76,30 +77,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 }
 
+// Modificar el action para aceptar un array de cambios
 export async function action({ request }: ActionFunctionArgs) {
   await requireUser(request);
-  
   const formData = await request.formData();
-  const productId = formData.get("productId");
-  const newCantidad = formData.get("cantidad");
-
-  if (productId && newCantidad !== null) {
-    const cantidad = parseInt(newCantidad.toString());
-    
-    // Actualizar o insertar en la tabla inventario
-    const { error } = await supabase
-      .from('inventario')
-      .upsert({ 
-        product_id: parseInt(productId.toString()), 
-        cantidad: cantidad,
-        updated_at: new Date().toISOString()
-      });
-
-    if (error) {
-      return json({ error: error.message }, { status: 400 });
+  const changesRaw = formData.get("changes");
+  let changes: Array<{ productId: number, cantidad: number }> = [];
+  try {
+    changes = JSON.parse(changesRaw as string);
+  } catch {
+    // fallback para compatibilidad
+    const productId = formData.get("productId");
+    const newCantidad = formData.get("cantidad");
+    if (productId && newCantidad !== null) {
+      changes = [{ productId: parseInt(productId.toString()), cantidad: parseInt(newCantidad.toString()) }];
     }
   }
-
+  for (const change of changes) {
+    await supabase
+      .from('inventario')
+      .upsert({ 
+        product_id: change.productId, 
+        cantidad: change.cantidad,
+        updated_at: new Date().toISOString()
+      });
+  }
   return json({ success: true });
 }
 
@@ -133,6 +135,8 @@ export default function Inventario() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
+  const prevProductsRef = useRef<any[]>(products);
+
   // Debounce para los filtros
   const debouncedSearch = useDebounce(searchValue, 300);
   const debouncedColor = useDebounce(colorValue, 300);
@@ -165,12 +169,53 @@ export default function Inventario() {
   // Efecto para revalidar datos cuando se completa una acción
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data && typeof fetcher.data === 'object' && 'success' in fetcher.data) {
-      // Limpiar cambios pendientes después de guardar exitosamente
-      setPendingChanges({});
-      // Revalidar los datos para obtener la información más actualizada
       revalidator.revalidate();
     }
   }, [fetcher.state, fetcher.data, revalidator]);
+
+  // 1. Estado local para los valores de cantidad de cada producto
+  const [inputValues, setInputValues] = useState<{[key: number]: number}>({});
+
+  // 2. Inicializar inputValues cada vez que los productos cambian, solo si no hay cambios pendientes
+  useEffect(() => {
+    if (Object.keys(pendingChanges).length === 0) {
+      const initialValues: {[key: number]: number} = {};
+      products.forEach((product: any) => {
+        initialValues[product.id] = product.cantidad;
+      });
+      setInputValues(initialValues);
+      setPendingChanges({});
+      prevProductsRef.current = products;
+    }
+  }, [products]);
+
+  // 3. Al escribir en el input, actualizar inputValues y pendingChanges
+  const handleInputChange = (productId: number, newValue: number) => {
+    setInputValues(prev => ({ ...prev, [productId]: newValue }));
+    // Solo marcar como pendiente si el valor es diferente al original
+    const original = products.find((p: any) => p.id === productId)?.cantidad;
+    setPendingChanges(prev => {
+      const updated = { ...prev };
+      if (newValue !== original) {
+        updated[productId] = newValue;
+      } else {
+        delete updated[productId];
+      }
+      return updated;
+    });
+  };
+
+  // 4. Al guardar, solo enviar los cambios respecto a los productos originales
+  // Modificar handleSaveAll para enviar todos los cambios juntos
+  const handleSaveAll = () => {
+    const changesArr = Object.entries(pendingChanges).map(([productId, cantidad]) => ({
+      productId: parseInt(productId),
+      cantidad: cantidad as number
+    }));
+    const formData = new FormData();
+    formData.append("changes", JSON.stringify(changesArr));
+    fetcher.submit(formData, { method: "post" });
+  };
 
   const handleEdit = (product: any) => {
     setEditingId(product.id);
@@ -198,16 +243,6 @@ export default function Inventario() {
     }));
   };
 
-  const handleSaveAll = () => {
-    // Guardar todos los cambios pendientes
-    Object.entries(pendingChanges).forEach(([productId, cantidad]) => {
-      fetcher.submit(
-        { productId, cantidad: cantidad.toString() },
-        { method: "post" }
-      );
-    });
-  };
-
   const handleClearFilters = useCallback(() => {
     setSearchValue('');
     setColorValue('');
@@ -217,62 +252,71 @@ export default function Inventario() {
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
   const isSubmitting = fetcher.state === 'submitting';
 
+  // Efecto para limpiar pendingChanges y reinicializar inputValues tras guardar exitosamente
+  const prevIsSubmitting = useRef(isSubmitting);
+  useEffect(() => {
+    if (
+      prevIsSubmitting.current &&
+      !isSubmitting &&
+      fetcher.data &&
+      typeof fetcher.data === 'object' &&
+      'success' in fetcher.data &&
+      fetcher.data.success
+    ) {
+      const initialValues: {[key: number]: number} = {};
+      products.forEach((product: any) => {
+        initialValues[product.id] = product.cantidad;
+      });
+      setInputValues(initialValues);
+      setPendingChanges({});
+    }
+    prevIsSubmitting.current = isSubmitting;
+  }, [isSubmitting, fetcher.data, products]);
+
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50 px-2 pt-4 pb-4 sm:p-6 w-full pt-16 sm:pt-4">
+      <div className="w-full sm:max-w-7xl sm:mx-auto">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 space-y-2 sm:space-y-0">
           <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Inventario</h1>
-          {hasPendingChanges && (
-            <button
-              onClick={handleSaveAll}
-              disabled={isSubmitting}
-              className={`px-4 py-2 text-white text-sm font-medium rounded transition ${
-                isSubmitting 
-                  ? 'bg-gray-400 cursor-not-allowed' 
-                  : 'bg-[#D727FF] hover:bg-[#b81fc7]'
-              }`}
-            >
-              {isSubmitting ? 'Guardando...' : `Guardar Cambios (${Object.keys(pendingChanges).length})`}
-            </button>
-          )}
         </div>
         
         {/* Filtros */}
-        <div className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-gray-200 mb-4 sm:mb-6">
-          <div className="space-y-4 sm:space-y-0 sm:grid sm:grid-cols-1 md:grid-cols-3 sm:gap-4">
+        <div className="bg-white p-4 sm:p-6 rounded-lg shadow-sm border border-gray-200 mb-4 sm:mb-6 w-full">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:gap-4 w-full">
             {/* Búsqueda General */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1 bg-white">Buscar Producto</label>
+            <div className="flex-1">
               <input
                 type="text"
                 value={searchValue}
                 onChange={(e) => setSearchValue(e.target.value)}
-                placeholder="Ej: downline 1039"
-                className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900"
+                placeholder="Buscar Producto (Ej: downline 1039)"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 h-10"
               />
             </div>
-
             {/* Filtro Color */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1 bg-white">Color</label>
+            <div className="flex items-center gap-2 mt-2 sm:mt-0">
               <select
                 value={colorValue}
                 onChange={(e) => setColorValue(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900"
+                className="px-3 py-2 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 h-10"
+                style={{ minWidth: 180 }}
               >
                 <option value="">Todos los colores</option>
                 {filters.colores.map((color: string) => (
                   <option key={color} value={color}>{color}</option>
                 ))}
               </select>
+              <span
+                className="inline-block w-8 h-8 rounded border border-gray-300 transition-colors duration-200 align-middle"
+                style={{ backgroundColor: colorValue ? getColorHex(colorValue) : 'transparent' }}
+              />
             </div>
-
             {/* Botón Limpiar */}
-            <div className="flex items-end">
+            <div className="flex items-center mt-2 sm:mt-0">
               <button
                 type="button"
                 onClick={handleClearFilters}
-                className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-300 transition"
+                className="px-4 h-10 bg-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-300 transition"
               >
                 Limpiar Filtros
               </button>
@@ -280,9 +324,41 @@ export default function Inventario() {
           </div>
         </div>
 
-        {/* Tabla */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+        {/* Cards en mobile, tabla en desktop */}
+        <div className="block sm:hidden">
+          <div className="space-y-4">
+            {products.map((product: any) => {
+              const pendingValue = pendingChanges[product.id];
+              const displayValue = pendingValue !== undefined ? pendingValue : product.cantidad;
+              const hasPendingChange = pendingValue !== undefined;
+              return (
+                <div key={product.id} className="flex w-full items-stretch bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="flex-1 flex flex-col justify-center p-3 min-w-0">
+                    <div className="font-medium text-gray-900 text-sm mb-1 break-words whitespace-normal">{product.title || 'Sin título'}</div>
+                    <div className="flex items-center space-x-2 mb-2">
+                      <div className="w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: product.color?.startsWith('#') ? product.color : '#CCCCCC', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)' }} />
+                      <span className="text-xs font-medium break-words whitespace-normal" style={{ color: product.color?.startsWith('#') ? product.color : undefined }}>{product.color || 'Sin color'}</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <label className="text-xs text-gray-500">Cantidad:</label>
+                      <input
+                        type="number"
+                        value={inputValues[product.id] ?? product.cantidad}
+                        onChange={e => handleInputChange(product.id, parseInt(e.target.value) || 0)}
+                        disabled={isSubmitting}
+                        className={`w-16 px-2 py-1 border rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 ${hasPendingChange ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'} ${isSubmitting ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                        min="0"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* Tabla en desktop */}
+        <div className="hidden sm:block bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden w-full">
+          <div className="sm:overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -316,62 +392,14 @@ export default function Inventario() {
                         </div>
                       </td>
                       <td className="px-3 sm:px-6 py-4 text-sm text-gray-900">
-                        {editingId === product.id ? (
-                          <div className="flex items-center space-x-1 sm:space-x-2">
-                            <input
-                              type="number"
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              className="w-16 sm:w-20 px-2 py-1 border border-gray-300 rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900"
-                              min="0"
-                            />
-                            <button
-                              onClick={() => handleSave(product.id)}
-                              disabled={isSubmitting}
-                              className={`text-sm font-medium p-1 ${
-                                isSubmitting ? 'text-gray-400' : 'text-[#D727FF] hover:text-[#b81fc7]'
-                              }`}
-                            >
-                              ✓
-                            </button>
-                            <button
-                              onClick={handleCancel}
-                              disabled={isSubmitting}
-                              className={`text-sm font-medium p-1 ${
-                                isSubmitting ? 'text-gray-400' : 'text-gray-500 hover:text-gray-700'
-                              }`}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center space-x-1 sm:space-x-2">
-                            <div className="flex items-center space-x-1">
-                              <input
-                                type="number"
-                                value={displayValue}
-                                onChange={(e) => handleQuickEdit(product.id, parseInt(e.target.value) || 0)}
-                                disabled={isSubmitting}
-                                className={`w-16 sm:w-20 px-2 py-1 border rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 ${
-                                  hasPendingChange ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
-                                } ${isSubmitting ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                min="0"
-                              />
-                              {hasPendingChange && (
-                                <span className="text-yellow-600 text-xs">*</span>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => handleEdit(product)}
-                              disabled={isSubmitting}
-                              className={`text-sm font-medium p-1 ${
-                                isSubmitting ? 'text-gray-400' : 'text-[#D727FF] hover:text-[#b81fc7]'
-                              }`}
-                            >
-                              ✏️
-                            </button>
-                          </div>
-                        )}
+                        <input
+                          type="number"
+                          value={inputValues[product.id] ?? product.cantidad}
+                          onChange={e => handleInputChange(product.id, parseInt(e.target.value) || 0)}
+                          disabled={isSubmitting}
+                          className={`w-16 sm:w-20 px-2 py-1 border rounded text-sm focus:border-[#D727FF] focus:ring-[#D727FF] outline-none bg-white text-gray-900 ${hasPendingChange ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'}`}
+                          min="0"
+                        />
                       </td>
                     </tr>
                   );
@@ -386,6 +414,28 @@ export default function Inventario() {
             </div>
           )}
         </div>
+        {/* Modal flotante para guardar/cancelar cambios pendientes */}
+        {hasPendingChanges && (
+          <div
+            className="fixed bottom-6 right-6 z-50 bg-white shadow-lg border border-gray-200 px-6 py-4 flex items-center gap-4 rounded-[25px]"
+            style={{ minWidth: 240 }}
+          >
+            <button
+              onClick={handleSaveAll}
+              disabled={isSubmitting}
+              className={`px-4 py-2 text-white text-sm font-semibold rounded-[18px] transition ${isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#D727FF] hover:bg-[#b81fc7]'}`}
+            >
+              {isSubmitting ? 'Guardando...' : `Guardar Cambios (${Object.keys(pendingChanges).length})`}
+            </button>
+            <button
+              onClick={() => setPendingChanges({})}
+              disabled={isSubmitting}
+              className={`px-4 py-2 text-sm font-semibold rounded-[18px] transition ${isSubmitting ? 'bg-gray-200 cursor-not-allowed' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
