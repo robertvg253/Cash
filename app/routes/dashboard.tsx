@@ -70,8 +70,8 @@ export default function Dashboard() {
     .map((p: any) => ({ name: p.title?.slice(0, 14) + (p.title?.length > 14 ? '…' : ''), cantidad: p.cantidad }));
 
   return (
-    <div className="min-h-screen bg-gray-50 w-full flex flex-col items-stretch">
-      <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4">
+    <div className="min-h-screen bg-gray-50 w-full flex flex-col items-stretch overflow-x-hidden">
+      <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 pt-16">
         {/* Módulo de usuario y cerrar sesión */}
         <div className="w-full bg-white border border-gray-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-4 shadow-sm">
           <div className="flex flex-col gap-1">

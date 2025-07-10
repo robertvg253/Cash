@@ -163,8 +163,8 @@ export default function Catalogo() {
   }, [deleting, fetcher.state]);
 
   return (
-    <div className="min-h-screen bg-gray-50 px-2 pt-4 pb-4 sm:p-6 w-full pt-16 sm:pt-4">
-      <div className="w-full sm:max-w-7xl sm:mx-auto">
+    <div className="min-h-screen bg-gray-50 w-full flex flex-col items-stretch overflow-x-hidden">
+      <div className="w-full sm:max-w-7xl sm:mx-auto px-2 pt-16 pb-4 sm:p-6">
         <h1 className="text-2xl font-semibold text-gray-900 mb-6">Catálogo</h1>
         {error && <div className="text-red-500 mb-4">{error}</div>}
         {/* Barra de búsqueda y filtrado arriba, igual que Inventario */}

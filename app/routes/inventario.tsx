@@ -274,8 +274,8 @@ export default function Inventario() {
   }, [isSubmitting, fetcher.data, products]);
 
   return (
-    <div className="min-h-screen bg-gray-50 px-2 pt-4 pb-4 sm:p-6 w-full pt-16 sm:pt-4">
-      <div className="w-full sm:max-w-7xl sm:mx-auto">
+    <div className="min-h-screen bg-gray-50 w-full flex flex-col items-stretch overflow-x-hidden">
+      <div className="w-full sm:max-w-7xl sm:mx-auto px-2 pt-16 pb-4 sm:p-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 space-y-2 sm:space-y-0">
           <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Inventario</h1>
         </div>
